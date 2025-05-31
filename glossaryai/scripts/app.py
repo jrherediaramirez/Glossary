@@ -10,7 +10,11 @@ CORS(app)
 
 # Database configuration
 basedir = os.path.abspath(os.path.dirname(__file__))
-app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{os.path.join(basedir, "glossary.db")}'
+# Define a data directory for the database
+DATA_DIR = os.path.join(basedir, 'db_data')
+os.makedirs(DATA_DIR, exist_ok=True) # Ensure the directory exists
+
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{os.path.join(DATA_DIR, "glossary.db")}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
@@ -49,18 +53,30 @@ def parse_glossary_input(text):
     
     for line in lines:
         if line.strip():
-            if ':' in line and not current_key:
-                key, value = line.split(':', 1)
-                key = key.strip().lower()
-                value = value.strip()
-                
-                if key in ['term', 'aliases', 'category', 'definition']:
-                    data[key] = value
-                    current_key = key if key == 'definition' else None
+            if ':' in line and not current_key: # Ensure ':' is part of a key-value pair start, not in definition
+                parts = line.split(':', 1)
+                if len(parts) == 2:
+                    key, value = parts
+                    key = key.strip().lower()
+                    value = value.strip()
+                    
+                    if key in ['term', 'aliases', 'category', 'definition']:
+                        data[key] = value
+                        current_key = key if key == 'definition' else None # Set current_key only for definition
+                    else: # If key is not recognized, it might be part of a multi-line definition
+                        if current_key == 'definition':
+                             data['definition'] = data.get('definition', '') + '\n' + line.strip()
+                elif current_key == 'definition': # Line does not contain ':' but we are in a definition block
+                    data['definition'] = data.get('definition', '') + '\n' + line.strip()
+
             elif current_key == 'definition':
                 # Append to definition if it's multi-line
-                data['definition'] = data.get('definition', '') + ' ' + line.strip()
+                data['definition'] = data.get('definition', '') + '\n' + line.strip() # Changed ' ' to '\n' for better formatting
     
+    # Post-process definition to ensure it's a single string
+    if 'definition' in data:
+        data['definition'] = data['definition'].strip()
+
     # Parse aliases
     if 'aliases' in data:
         data['aliases'] = [a.strip() for a in data['aliases'].split(',') if a.strip()]
@@ -124,8 +140,9 @@ def add_term():
             parsed_data = parse_glossary_input(data['raw_text'])
             if 'term' not in parsed_data or 'definition' not in parsed_data:
                 return jsonify({'error': 'Invalid format. Must include Term and Definition.'}), 400
-            data = parsed_data
-            data['main_term'] = data.pop('term')
+            # Ensure 'term' key is correctly mapped to 'main_term'
+            parsed_data['main_term'] = parsed_data.pop('term')
+            data = parsed_data # Overwrite data with parsed_data
         
         # Validate required fields
         if not data.get('main_term') or not data.get('definition'):
@@ -137,11 +154,11 @@ def add_term():
             return jsonify({'error': f'Term "{data["main_term"]}" already exists.'}), 409
         
         # Check if any alias already exists
-        for alias in data.get('aliases', []):
-            existing_alias = Alias.query.filter_by(alias=alias).first()
+        for alias_str in data.get('aliases', []):
+            existing_alias = Alias.query.filter_by(alias=alias_str).first()
             if existing_alias:
                 return jsonify({
-                    'error': f'Alias "{alias}" already exists for term "{existing_alias.term.main_term}".'
+                    'error': f'Alias "{alias_str}" already exists for term "{existing_alias.term.main_term}".'
                 }), 409
         
         # Create new term
@@ -154,8 +171,8 @@ def add_term():
         db.session.flush()  # Get the ID before adding aliases
         
         # Add aliases
-        for alias in data.get('aliases', []):
-            new_alias = Alias(alias=alias, term_id=new_term.id)
+        for alias_str in data.get('aliases', []):
+            new_alias = Alias(alias=alias_str, term_id=new_term.id)
             db.session.add(new_alias)
         
         db.session.commit()
@@ -168,6 +185,7 @@ def add_term():
         
     except Exception as e:
         db.session.rollback()
+        app.logger.error(f"Error adding term: {e}", exc_info=True) # Log the full exception
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/terms/<int:term_id>', methods=['PUT'])
@@ -190,8 +208,8 @@ def update_term(term_id):
         if 'definition' in data:
             term.definition = data['definition']
         
-        if 'category' in data:
-            term.category = data['category']
+        if 'category' in data: # Allow setting category to None or empty string
+            term.category = data.get('category')
         
         # Update aliases
         if 'aliases' in data:
@@ -199,18 +217,19 @@ def update_term(term_id):
             Alias.query.filter_by(term_id=term_id).delete()
             
             # Add new aliases
-            for alias in data['aliases']:
+            for alias_str in data.get('aliases', []): # Ensure it's data.get('aliases', [])
+                if not alias_str: continue # Skip empty aliases
                 # Check if alias exists for another term
                 existing_alias = Alias.query.join(Term).filter(
-                    Alias.alias == alias,
+                    Alias.alias == alias_str,
                     Term.id != term_id
                 ).first()
                 if existing_alias:
                     return jsonify({
-                        'error': f'Alias "{alias}" already exists for term "{existing_alias.term.main_term}".'
+                        'error': f'Alias "{alias_str}" already exists for term "{existing_alias.term.main_term}".'
                     }), 409
                 
-                new_alias = Alias(alias=alias, term_id=term_id)
+                new_alias = Alias(alias=alias_str, term_id=term_id)
                 db.session.add(new_alias)
         
         term.updated_at = datetime.utcnow()
@@ -220,6 +239,7 @@ def update_term(term_id):
         
     except Exception as e:
         db.session.rollback()
+        app.logger.error(f"Error updating term {term_id}: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/terms/<int:term_id>', methods=['DELETE'])
@@ -231,12 +251,13 @@ def delete_term(term_id):
         return jsonify({'message': 'Term deleted successfully'}), 200
     except Exception as e:
         db.session.rollback()
+        app.logger.error(f"Error deleting term {term_id}: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/categories', methods=['GET'])
 def get_categories():
-    categories = db.session.query(Term.category).distinct().filter(Term.category.isnot(None)).all()
-    return jsonify([cat[0] for cat in categories])
+    categories = db.session.query(Term.category).distinct().filter(Term.category.isnot(None), Term.category != '').all()
+    return jsonify([cat[0] for cat in categories if cat[0]]) # Ensure category is not empty
 
 @app.route('/api/export', methods=['GET'])
 def export_terms():
@@ -254,4 +275,5 @@ def export_terms():
     return jsonify(export_data)
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    # For development, Gunicorn will be used in Docker for production
+    app.run(debug=True, host='0.0.0.0', port=5000)
