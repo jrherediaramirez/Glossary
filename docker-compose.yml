@@ -1,0 +1,39 @@
+version: "3.9"
+
+services:
+  frontend:
+    build:
+      context: ./glossaryai
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://backend:5000/api
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_URL: http://backend:5000/api
+    networks:
+      - glossary-net
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./glossaryai/scripts
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    volumes:
+      - glossary_db_volume:/app/db_data
+    environment:
+      FLASK_ENV: production
+    networks:
+      - glossary-net
+    restart: unless-stopped
+
+volumes:
+  glossary_db_volume:
+
+networks:
+  glossary-net:
+    driver: bridge

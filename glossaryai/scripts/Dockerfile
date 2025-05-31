@@ -19,12 +19,10 @@ COPY . .
 # Make port 5000 available to the world outside this container.
 EXPOSE 5000
 
-# Define environment variable for the Gunicorn workers (optional, defaults to 1 if not set)
+# Define environment variable for the Gunicorn workers.
+# This value will be used if not overridden in docker-compose.yml.
 ENV GUNICORN_WORKERS 4
 
 # Run app.py when the container launches using Gunicorn.
-# Gunicorn is a production-ready WSGI HTTP server.
-# -w: number of worker processes
-# -b: bind address and port
-# app:app refers to the 'app' Flask instance within the 'app.py' file.
-CMD ["gunicorn", "-w", "$GUNICORN_WORKERS", "-b", "0.0.0.0:5000", "app:app"]
+# Use shell form for CMD to allow environment variable substitution.
+CMD gunicorn -w "$GUNICORN_WORKERS" -b "0.0.0.0:5000" app:app
