@@ -15,8 +15,8 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
 
-  // Use environment variable for API URL, fallback for local development if not set
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+  // Use relative URLs to go through Next.js proxy
+  const API_URL = '/api';
 
   // Function to display messages and auto-clear them
   const showMessage = (type, text, duration = 3000) => {
@@ -73,7 +73,7 @@ export default function Home() {
   useEffect(() => {
     fetchTerms();
     fetchCategories();
-  }, [currentPage, searchQuery, selectedCategory]); // API_URL is constant after init, no need to add
+  }, [currentPage, searchQuery, selectedCategory]);
 
   // Add new term
   const handleAddTerm = async (e) => {
